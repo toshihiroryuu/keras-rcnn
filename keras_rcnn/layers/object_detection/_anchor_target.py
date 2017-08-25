@@ -45,18 +45,17 @@ class AnchorTarget(keras.layers.Layer):
 
         gt_boxes = gt_boxes[0]
 
-        # TODO: Fix usage of batch index
-        rr, cc, total_anchors = keras.backend.int_shape(scores)[1:]
-        total_anchors = rr * cc * total_anchors // 2
+        rr = keras.backend.shape(scores)[1]
+        cc = keras.backend.shape(scores)[2]
 
         # 1. Generate proposals from bbox deltas and shifted anchors
         anchors = keras_rcnn.backend.shift((rr, cc), self.stride)
 
         # only keep anchors inside the image
-        inds_inside, anchors = inside_image(anchors, metadata, self.allowed_border)
+        inds_inside = inside_image(anchors, metadata, self.allowed_border)
 
         # 2. obtain indices of gt boxes with the greatest overlap, balanced labels
-        argmax_overlaps_indices, labels = label(gt_boxes, anchors, inds_inside, self.negative_overlap, self.positive_overlap, self.clobber_positives)
+        argmax_overlaps_indices, labels = label(gt_boxes, anchors, self.negative_overlap, self.positive_overlap, self.clobber_positives)
 
         gt_boxes = keras.backend.gather(gt_boxes, argmax_overlaps_indices)
 
@@ -66,9 +65,8 @@ class AnchorTarget(keras.layers.Layer):
         # TODO: Why is bbox_reg_targets' shape (5, ?, 4)? Why is gt_boxes' shape (None, None, 4) and not (None, 4)?
         bbox_reg_targets = keras.backend.reshape(bbox_reg_targets, (-1, 4))
 
-        # map up to original set of anchors
-        labels = unmap(labels, total_anchors, inds_inside, fill=-1)
-        bbox_reg_targets = unmap(bbox_reg_targets, total_anchors, inds_inside, fill=0)
+        # tensorflow.scatter_update(labels,inds_inside,-1)
+
         labels = keras.backend.expand_dims(labels, axis=0)
         bbox_reg_targets = keras.backend.expand_dims(bbox_reg_targets, axis=0)
 
@@ -76,7 +74,7 @@ class AnchorTarget(keras.layers.Layer):
         return [labels, bbox_reg_targets]
 
     def compute_output_shape(self, input_shape):
-        return [(1, None), (1, None, 4)]
+        return [(None, None), (None, None, 4)]
 
     def compute_mask(self, inputs, mask=None):
         # unfortunately this is required
@@ -99,7 +97,7 @@ def balance(labels):
     return labels
 
 
-def label(y_true, y_pred, inds_inside, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OVERLAP=0.7, clobber_positives=False):
+def label(y_true, y_pred, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OVERLAP=0.7, clobber_positives=False):
     """
     Create bbox labels.
     label: 1 is positive, 0 is negative, -1 is do not care
@@ -110,11 +108,12 @@ def label(y_true, y_pred, inds_inside, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OV
 
     :return: indices of gt boxes with the greatest overlap, balanced labels
     """
-    ones = keras.backend.ones_like(inds_inside, dtype=keras.backend.floatx())
-    labels = ones * -1
-    zeros = keras.backend.zeros_like(inds_inside, dtype=keras.backend.floatx())
 
-    argmax_overlaps_inds, max_overlaps, gt_argmax_overlaps_inds = overlapping(y_pred, y_true, inds_inside)
+    ones = keras.backend.ones_like(y_pred[:,:1], dtype=keras.backend.floatx())
+    labels = ones * -1
+    zeros = keras.backend.zeros_like(y_pred[:,:1], dtype=keras.backend.floatx())
+
+    argmax_overlaps_inds, max_overlaps, gt_argmax_overlaps_inds = overlapping(y_pred, y_true)
 
     # assign bg labels first so that positive labels can clobber them
     if not clobber_positives:
@@ -135,11 +134,13 @@ def label(y_true, y_pred, inds_inside, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OV
     if clobber_positives:
         # assign bg labels last so that negative labels can clobber positives
         labels = keras_rcnn.backend.where(keras.backend.less(max_overlaps, RPN_NEGATIVE_OVERLAP), zeros, labels)
-
+    
+    labels = keras.backend.reshape(labels, (-1,))
+    
     return argmax_overlaps_inds, balance(labels)
 
 
-def overlapping(anchors, gt_boxes, inds_inside):
+def overlapping(anchors, gt_boxes):
     """
     overlaps between the anchors and the gt boxes
     :param anchors: Generated anchors
@@ -157,7 +158,7 @@ def overlapping(anchors, gt_boxes, inds_inside):
 
     argmax_overlaps_inds = keras.backend.argmax(reference, axis=1)
 
-    arranged = keras.backend.arange(0, keras.backend.shape(inds_inside)[0])
+    arranged = keras.backend.arange(0, keras.backend.shape(anchors)[0])
 
     indices = keras.backend.stack([arranged, keras.backend.cast(argmax_overlaps_inds, "int32")], axis=0)
 
@@ -231,34 +232,6 @@ def subsample_positive_labels(labels):
     return keras.backend.switch(condition, labels, lambda: more_positive())
 
 
-def unmap(data, count, inds_inside, fill=0):
-    """ Unmap a subset of item (data) back to the original set of items (of
-    size count) """
-
-    if keras.backend.ndim(data) == 1:
-        ret = keras.backend.ones((count,), dtype=keras.backend.floatx()) * fill
-
-        inds_nd = keras.backend.expand_dims(inds_inside)
-    else:
-        ret = keras.backend.ones((count,) + keras.backend.int_shape(data)[1:], dtype=keras.backend.floatx()) * fill
-        data = keras.backend.transpose(data)
-        data = keras.backend.reshape(data, (-1,))
-
-        inds_ii = keras.backend.tile(inds_inside, [4])
-        inds_ii = keras.backend.expand_dims(inds_ii)
-
-        ones = keras.backend.expand_dims(keras.backend.ones_like(inds_inside), 1)
-
-        inds_coords = keras.backend.concatenate([ones * 0, ones, ones * 2, ones * 3], 0)
-
-        inds_nd = keras.backend.concatenate([inds_ii, inds_coords], 1)
-
-    inverse_ret = keras_rcnn.backend.squeeze(keras_rcnn.backend.gather_nd(-1 * ret, inds_nd))
-
-    ret = keras_rcnn.backend.scatter_add_tensor(ret, inds_nd, inverse_ret + data)
-
-    return ret
-
 
 def inside_image(boxes, im_info, allowed_border=0):
     """
@@ -281,6 +254,4 @@ def inside_image(boxes, im_info, allowed_border=0):
 
     indices = keras.backend.cast(indices, "int32")
 
-    gathered = keras.backend.gather(boxes, indices)
-
-    return indices[:, 0], keras.backend.reshape(gathered, [-1, 4])
+    return indices[:, 0]
