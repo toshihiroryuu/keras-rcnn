@@ -41,7 +41,7 @@ class AnchorTarget(keras.layers.Layer):
     def call(self, inputs, **kwargs):
         scores, gt_boxes, metadata = inputs
 
-        metadata = metadata[0,:]
+        metadata = metadata[0, :]
 
         gt_boxes = gt_boxes[0]
 
@@ -49,7 +49,7 @@ class AnchorTarget(keras.layers.Layer):
         cc = keras.backend.shape(scores)[2]
 
         # 1. Generate proposals from bbox deltas and shifted anchors
-        anchors = keras_rcnn.backend.shift((rr, cc), self.stride)       
+        anchors = keras_rcnn.backend.shift((rr, cc), self.stride)
 
         # 2. obtain indices of gt boxes with the greatest overlap, balanced labels
         argmax_overlaps_indices, labels = label(gt_boxes, anchors, self.negative_overlap, self.positive_overlap, self.clobber_positives)
@@ -59,14 +59,14 @@ class AnchorTarget(keras.layers.Layer):
         # Convert fixed anchors in (x, y, w, h) to (dx, dy, dw, dh)
         bbox_reg_targets = keras_rcnn.backend.bbox_transform(anchors, gt_boxes)
 
-        # reshape to (num_boxes, 4) 
+        # reshape to (num_boxes, 4)
         bbox_reg_targets = keras.backend.reshape(bbox_reg_targets, (-1, 4))
-        
+
         # only keep anchors inside the image
         inds_inside = inside_image(anchors, metadata, self.allowed_border)
         labels = keras_rcnn.backend.where(inds_inside, labels, -1 * tensorflow.ones_like(labels))
 
-        # expand the 0th axis as keras requires that exis for batch samples        
+        # expand the 0th axis as keras requires that exis for batch samples
         labels = keras.backend.expand_dims(labels, axis=0)
         bbox_reg_targets = keras.backend.expand_dims(bbox_reg_targets, axis=0)
 
@@ -109,9 +109,9 @@ def label(y_true, y_pred, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OVERLAP=0.7, cl
     :return: indices of gt boxes with the greatest overlap, balanced labels
     """
 
-    ones = keras.backend.ones_like(y_pred[:,:1], dtype=keras.backend.floatx())
+    ones = keras.backend.ones_like(y_pred[:, :1], dtype=keras.backend.floatx())
     labels = ones * -1
-    zeros = keras.backend.zeros_like(y_pred[:,:1], dtype=keras.backend.floatx())
+    zeros = keras.backend.zeros_like(y_pred[:, :1], dtype=keras.backend.floatx())
 
     argmax_overlaps_inds, max_overlaps, gt_argmax_overlaps_inds = overlapping(y_pred, y_true)
 
@@ -125,7 +125,7 @@ def label(y_true, y_pred, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OVERLAP=0.7, cl
     unique_indices, unique_indices_indices = keras_rcnn.backend.unique(gt_argmax_overlaps_inds, return_index=True)
     inverse_labels = keras.backend.gather(-1 * labels, unique_indices)
     unique_indices = keras.backend.expand_dims(unique_indices, 1)
-    updates = keras.backend.ones_like(keras.backend.reshape(unique_indices, (-1,1)), dtype=keras.backend.floatx())
+    updates = keras.backend.ones_like(keras.backend.reshape(unique_indices, (-1, 1)), dtype=keras.backend.floatx())
 
     #return labels, unique_indices, inverse_labels, updates
     labels = keras_rcnn.backend.scatter_add_tensor(labels, unique_indices, inverse_labels + updates)
@@ -135,9 +135,9 @@ def label(y_true, y_pred, RPN_NEGATIVE_OVERLAP=0.3, RPN_POSITIVE_OVERLAP=0.7, cl
     if clobber_positives:
         # assign bg labels last so that negative labels can clobber positives
         labels = keras_rcnn.backend.where(keras.backend.less(max_overlaps, RPN_NEGATIVE_OVERLAP), zeros, labels)
-    
+
     labels = keras.backend.reshape(labels, (-1,))
-    
+
     return argmax_overlaps_inds, balance(labels)
 
 
@@ -233,7 +233,6 @@ def subsample_positive_labels(labels):
     return keras.backend.switch(condition, labels, lambda: more_positive())
 
 
-
 def inside_image(boxes, im_info, allowed_border=0):
     """
     Calc indices of boxes which are located completely inside of the image
@@ -249,8 +248,8 @@ def inside_image(boxes, im_info, allowed_border=0):
     indices = (
         (boxes[:, 0] >= -allowed_border) &
         (boxes[:, 1] >= -allowed_border) &
-        (boxes[:, 2] < allowed_border + im_info[1]) & # width
-        (boxes[:, 3] < allowed_border + im_info[0])   # height
+        (boxes[:, 2] < allowed_border + im_info[1]) &  # width
+        (boxes[:, 3] < allowed_border + im_info[0])    # height
     )
 
     return indices
